@@ -21,6 +21,10 @@
   --biq-border: #e5e7eb;
   --biq-accent: #111827;
   --biq-accent-fg: #ffffff;
+  /* Pill launcher color (kept separate from --biq-accent so the panel's
+     Send button etc. are unaffected). */
+  --biq-pill-bg: #c37663;
+  --biq-pill-fg: #ffffff;
   --biq-radius: 14px;
 
   position: fixed;
@@ -49,8 +53,8 @@
   padding: 12px 18px;
   border: none;
   border-radius: 999px;
-  background: var(--biq-accent);
-  color: var(--biq-accent-fg);
+  background: var(--biq-pill-bg);
+  color: var(--biq-pill-fg);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -60,7 +64,7 @@
   visibility: hidden;
   opacity: 0;
   transform: scale(0.85);
-  transform-origin: bottom right;
+  transform-origin: center;
   pointer-events: none;
 }
 
@@ -72,8 +76,18 @@
   pointer-events: auto;
 }
 
-.biq-pill:hover {
-  box-shadow: 0 10px 28px rgba(17, 24, 39, 0.32);
+/* Slight zoom on hover; gentle press on click. (Transitions are gated by the
+   reduced-motion media query below, so this snaps instantly when the visitor
+   prefers reduced motion.) */
+.biq-root--pill .biq-pill:hover,
+.biq-root--peek .biq-pill:hover {
+  transform: scale(1.06);
+  box-shadow: 0 12px 30px rgba(17, 24, 39, 0.34);
+}
+
+.biq-root--pill .biq-pill:active,
+.biq-root--peek .biq-pill:active {
+  transform: scale(0.98);
 }
 
 .biq-pill:focus-visible {
