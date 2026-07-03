@@ -1,0 +1,238 @@
+/* ==========================================================================
+   BODYiQ chat widget styles.
+   Everything is namespaced under .biq-widget and uses CSS variables so the
+   theme can override brand colors without touching the bundle. The widget
+   renders INLINE (fills its host container); it is not a floating bubble.
+   ========================================================================== */
+
+.biq-widget {
+  --biq-bg: #ffffff;
+  --biq-fg: #1a1a1a;
+  --biq-muted: #6b7280;
+  --biq-border: #e5e7eb;
+  --biq-accent: #111827;
+  --biq-accent-fg: #ffffff;
+  --biq-user-bg: #111827;
+  --biq-user-fg: #ffffff;
+  --biq-assistant-bg: #f3f4f6;
+  --biq-radius: 14px;
+
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--biq-border);
+  border-radius: var(--biq-radius);
+  background: var(--biq-bg);
+  color: var(--biq-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+.biq-widget *,
+.biq-widget *::before,
+.biq-widget *::after {
+  box-sizing: border-box;
+}
+
+.biq-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--biq-border);
+  font-weight: 600;
+}
+
+.biq-title {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+.biq-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  min-height: 220px;
+  max-height: 440px;
+  overflow-y: auto;
+}
+
+.biq-msg {
+  display: flex;
+}
+
+.biq-msg--user {
+  justify-content: flex-end;
+}
+
+.biq-msg--assistant {
+  justify-content: flex-start;
+}
+
+.biq-bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.biq-msg--user .biq-bubble {
+  background: var(--biq-user-bg);
+  color: var(--biq-user-fg);
+  border-bottom-right-radius: 4px;
+}
+
+.biq-msg--assistant .biq-bubble {
+  background: var(--biq-assistant-bg);
+  color: var(--biq-fg);
+  border-bottom-left-radius: 4px;
+}
+
+/* Blinking caret while tokens stream in. */
+.biq-bubble--streaming::after {
+  content: "▍";
+  margin-left: 2px;
+  animation: biq-blink 1s steps(2, start) infinite;
+  color: var(--biq-muted);
+}
+
+@keyframes biq-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.biq-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
+.biq-chip {
+  border: 1px solid var(--biq-border);
+  background: var(--biq-bg);
+  color: var(--biq-fg);
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.biq-chip:hover {
+  background: var(--biq-assistant-bg);
+  border-color: var(--biq-muted);
+}
+
+.biq-composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--biq-border);
+}
+
+.biq-input {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--biq-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  color: inherit;
+  background: var(--biq-bg);
+  max-height: 120px;
+}
+
+.biq-input:focus {
+  outline: none;
+  border-color: var(--biq-accent);
+}
+
+.biq-send {
+  border: none;
+  background: var(--biq-accent);
+  color: var(--biq-accent-fg);
+  padding: 0 18px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.biq-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.biq-citations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-left: 2px;
+}
+
+.biq-citations__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--biq-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.biq-citation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--biq-border);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--biq-fg);
+  transition: border-color 0.15s ease;
+}
+
+.biq-citation:hover {
+  border-color: var(--biq-muted);
+}
+
+.biq-citation__type {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--biq-muted);
+  border: 1px solid var(--biq-border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+
+.biq-citation__title {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.biq-footer {
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--biq-border);
+}
+
+.biq-human {
+  background: none;
+  border: none;
+  color: var(--biq-muted);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+.biq-human:hover {
+  color: var(--biq-fg);
+}

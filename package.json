@@ -1,0 +1,36 @@
+{
+  "name": "bodyiq-ai-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI shopping/support/education assistant backend for the BODYiQ Shopify storefront.",
+  "scripts": {
+    "predev": "npm run build:widget",
+    "dev": "next dev",
+    "prebuild": "npm run build:widget",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "backfill": "tsx src/scripts/backfill-embeddings.ts",
+    "build:widget": "tsx src/widget/build.config.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@supabase/supabase-js": "^2.45.4",
+    "next": "^14.2.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.11",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "dotenv": "^16.4.5",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}

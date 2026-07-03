@@ -1,0 +1,66 @@
+{%- comment -%}
+  BODYiQ AI Assistant — theme snippet
+  ------------------------------------------------------------------
+  Drop this file at snippets/ai-chat-widget.liquid, then render it where you
+  want the assistant to appear INLINE, e.g. inside a product section or an
+  article template:
+
+      {% render 'ai-chat-widget' %}
+
+  It loads the compiled widget bundle (widget.js / widget.css) from the origin
+  where this service is deployed and initializes it with the current page's
+  context inferred from Liquid template objects.
+
+  CONFIG — the asset origin is NOT hardcoded. Set a theme setting named
+  `assistant_origin` (Online Store → Themes → Customize → Theme settings, or in
+  settings_schema.json) to the value of NEXT_PUBLIC_WIDGET_ORIGIN from the
+  service's environment (e.g. https://assistant.bodyiq.com). The default below
+  is only a last-resort fallback.
+{%- endcomment -%}
+
+{%- comment -%} Set assistant_origin WITHOUT a trailing slash (e.g. https://assistant.bodyiq.com). {%- endcomment -%}
+{%- assign assistant_origin = settings.assistant_origin | default: 'https://assistant.bodyiq.com' | strip -%}
+
+{%- comment -%} Infer page context + contextual quick replies from the template. {%- endcomment -%}
+{%- capture page_context_json -%}
+  {%- if template.name == 'product' -%}
+    {"type":"product","handle":{{ product.handle | json }}}
+  {%- elsif template.name == 'article' -%}
+    {"type":"blog","handle":{{ article.handle | json }}}
+  {%- else -%}
+    null
+  {%- endif -%}
+{%- endcapture -%}
+
+{%- capture quick_replies_json -%}
+  {%- if template.name == 'product' -%}
+    ["Is this right for me?","How do I take it?","What's in it?","Talk to a person"]
+  {%- elsif template.name == 'article' -%}
+    ["Summarize this article","Which product fits this?","Ask a follow-up"]
+  {%- else -%}
+    ["Help me pick a product","How do your supplements work?","Shipping & returns"]
+  {%- endif -%}
+{%- endcapture -%}
+
+<link rel="stylesheet" href="{{ assistant_origin }}/widget.css">
+
+<div id="bodyiq-assistant" class="bodyiq-assistant-mount"></div>
+
+<script src="{{ assistant_origin }}/widget.js" defer></script>
+<script>
+  (function () {
+    var origin = {{ assistant_origin | json }};
+    var config = {
+      target: '#bodyiq-assistant',
+      apiUrl: origin + '/api/chat',
+      pageContext: {{ page_context_json | strip }},
+      quickReplies: {{ quick_replies_json | strip }},
+      title: 'Ask BODYiQ',
+      humanHandoffUrl: {{ routes.root_url | append: '/pages/contact' | json }}
+    };
+    // widget.js is deferred, so it has executed by the time window 'load' fires.
+    window.addEventListener('load', function () {
+      if (window.BODYiQAssistant) window.BODYiQAssistant.init(config);
+    });
+  })();
+</script>
