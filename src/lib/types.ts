@@ -74,6 +74,25 @@ export interface PageContext {
   type?: SourceType;
   /** Product handle or article handle for the current page. */
   handle?: string;
+  /**
+   * Contextual one-liner surfaced by the widget's auto "peek" launcher, e.g.
+   * "Curious how this compares to X?". Set per product/article by the theme
+   * (Liquid) snippet. When omitted, the peek behavior simply never triggers on
+   * that page — we never show a peek with generic copy.
+   */
+  peekMessage?: string;
+  /**
+   * Dwell-time override (in seconds) before the peek fires on product pages.
+   * Defaults to 20 when omitted. (Article pages use scroll depth, not dwell.)
+   */
+  peekTriggerSeconds?: number;
+  /**
+   * Contextual quick-reply chips for the expanded chat state. Also reused to
+   * enrich the pill launcher's aria-label (no visual change). This mirrors the
+   * top-level widget `quickReplies` config for pages that prefer to attach them
+   * to the page context.
+   */
+  quickReplies?: string[];
 }
 
 /** A single turn of conversation as sent by the widget. */

@@ -1,15 +1,16 @@
 {%- comment -%}
   BODYiQ AI Assistant — theme snippet
   ------------------------------------------------------------------
-  Drop this file at snippets/ai-chat-widget.liquid, then render it where you
-  want the assistant to appear INLINE, e.g. inside a product section or an
-  article template:
+  Drop this file at snippets/ai-chat-widget.liquid, then render it once per page
+  (e.g. near the end of theme.liquid, or inside product/article templates):
 
       {% render 'ai-chat-widget' %}
 
-  It loads the compiled widget bundle (widget.js / widget.css) from the origin
-  where this service is deployed and initializes it with the current page's
-  context inferred from Liquid template objects.
+  The widget renders as a FLOATING, bottom-right launcher (it is position:fixed,
+  so it no longer matters exactly where in the template you render it — it will
+  not affect page layout). It loads the compiled bundle (widget.js / widget.css)
+  from the origin where this service is deployed and initializes it with the
+  current page's context inferred from Liquid template objects.
 
   CONFIG — the asset origin is NOT hardcoded. Set a theme setting named
   `assistant_origin` (Online Store → Themes → Customize → Theme settings, or in
@@ -21,12 +22,35 @@
 {%- comment -%} Set assistant_origin WITHOUT a trailing slash (e.g. https://assistant.bodyiq.com). {%- endcomment -%}
 {%- assign assistant_origin = settings.assistant_origin | default: 'https://assistant.bodyiq.com' | strip -%}
 
-{%- comment -%} Infer page context + contextual quick replies from the template. {%- endcomment -%}
+{%- comment -%}
+  Infer page context + contextual quick replies from the template.
+
+  peekMessage drives the auto "peek" launcher (a small contextual card that
+  surfaces above the pill after dwell/scroll). It is OPTIONAL: when it is not
+  set for a given product/article, we omit the key entirely and the peek simply
+  never triggers on that page (we never show a peek with generic copy).
+
+  TODO(bodyiq): decide which metafield holds the peek line and replace the
+  placeholder namespace/key below. The placeholder used here is
+  `metafields.custom.assistant_peek` (a single-line text metafield) — this is a
+  GUESS, do not treat it as final. Once you pick the real namespace/key (and
+  create the metafield definition in Shopify admin), update both branches.
+
+  Optional: you could also expose a per-page dwell override via another
+  metafield mapped to `peekTriggerSeconds` (number). Left out for now — flag if
+  you want it wired up.
+{%- endcomment -%}
 {%- capture page_context_json -%}
   {%- if template.name == 'product' -%}
-    {"type":"product","handle":{{ product.handle | json }}}
+    {%- assign peek_message = product.metafields.custom.assistant_peek | default: '' | strip -%}{%- comment -%} TODO(bodyiq): confirm metafield key {%- endcomment -%}
+    {"type":"product","handle":{{ product.handle | json }}
+    {%- if peek_message != '' -%},"peekMessage":{{ peek_message | json }}{%- endif -%}
+    }
   {%- elsif template.name == 'article' -%}
-    {"type":"blog","handle":{{ article.handle | json }}}
+    {%- assign peek_message = article.metafields.custom.assistant_peek | default: '' | strip -%}{%- comment -%} TODO(bodyiq): confirm metafield key {%- endcomment -%}
+    {"type":"blog","handle":{{ article.handle | json }}
+    {%- if peek_message != '' -%},"peekMessage":{{ peek_message | json }}{%- endif -%}
+    }
   {%- else -%}
     null
   {%- endif -%}

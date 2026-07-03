@@ -2,16 +2,34 @@
 // BODYiQ embeddable chat widget — vanilla TS, no framework.
 //
 // Compiled by build.config.ts into a single IIFE bundle (public/widget.js) that
-// exposes `window.BODYiQAssistant.init(config)`. It renders INLINE into a host
-// container (not a floating corner bubble) so the Shopify theme controls
-// placement (e.g. inside a PDP section or an article sidebar).
+// exposes `window.BODYiQAssistant.init(config)`.
+//
+// The widget is a floating, bottom-right LAUNCHER with a small state machine:
+//
+//   dormant → pill → (peek) → expanded
+//
+//   • dormant  — nothing visible (initial state on every page load)
+//   • pill     — small rounded launcher with a context-aware label
+//   • peek     — an auto-surfacing card above the pill with a contextual line
+//   • expanded — the full chat panel (the pill "grows" into it)
+//
+// The expanded panel's internal chat UI (messages, chips, input, streaming,
+// citations) is unchanged — only the triggering/transition shell around it is.
 // ===========================================================================
 
 type SourceType = "product" | "blog" | "policy";
 
+// Mirrors PageContext in src/lib/types.ts (kept inline so the widget bundle
+// stays self-contained). NOTE: article pages are typed as "blog" here.
 interface WidgetPageContext {
   type?: SourceType;
   handle?: string;
+  /** Contextual one-liner for the auto peek. Omit to disable peek on a page. */
+  peekMessage?: string;
+  /** Dwell seconds before peek fires on product pages (default 20). */
+  peekTriggerSeconds?: number;
+  /** Quick-reply chips; also used to enrich the pill aria-label. */
+  quickReplies?: string[];
 }
 
 interface WidgetCitation {
@@ -44,12 +62,45 @@ interface ChatTurn {
   content: string;
 }
 
+type LauncherState = "dormant" | "pill" | "peek" | "expanded";
+
 const DEFAULTS = {
   title: "Ask BODYiQ",
   greeting:
     "Hi! I can help you choose products, answer questions, and explain the science behind them. What are you looking for?",
   quickReplies: [] as string[],
 };
+
+// --- Launcher tuning (transition durations mirror chat-widget.css) ----------
+
+/** Delay before dormant → pill so it isn't jarring on page load. */
+const PILL_REVEAL_MS = 1500;
+/** How long a peek stays up before auto-collapsing back to the pill. */
+const PEEK_TIMEOUT_MS = 8000;
+/** peek → pill exit-animation length (must match the CSS transition). */
+const PEEK_EXIT_MS = 200;
+/** pill/peek → expanded grow-in length (must match the CSS transition). */
+const EXPAND_MS = 250;
+/** Default product-page dwell before the peek fires. */
+const DEFAULT_PEEK_DWELL_SECONDS = 20;
+/** Article scroll depth (0-1) that fires the peek. */
+const ARTICLE_SCROLL_FIRE_RATIO = 0.5;
+/** Suppress future peeks once the user has dismissed this many in a session. */
+const MAX_PEEK_DISMISSALS = 2;
+
+// sessionStorage keys (session-scoped: reset on a new tab session).
+const SS_OPENS = "biq:opens";
+const SS_PEEK_DISMISSALS = "biq:peek-dismissals";
+const ssPeekFiredKey = (handle?: string) => `biq:peek-fired:${handle || "_"}`;
+// Persisted so a conversation survives full-page navigations within a session.
+const SS_HISTORY = "biq:history";
+const SS_PANEL_OPEN = "biq:panel-open";
+
+// Inline, static SVGs (safe innerHTML — no user data).
+const ICON_CHAT =
+  '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>';
+const ICON_CLOSE =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
 // --- Small DOM helpers -----------------------------------------------------
 
@@ -71,18 +122,124 @@ function resolveTarget(target: string | HTMLElement): HTMLElement {
   return node;
 }
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function ssGet(key: string): number {
+  try {
+    return parseInt(window.sessionStorage.getItem(key) || "0", 10) || 0;
+  } catch {
+    return 0; // storage may be unavailable (private mode, etc.)
+  }
+}
+
+function ssSet(key: string, value: number): void {
+  try {
+    window.sessionStorage.setItem(key, String(value));
+  } catch {
+    /* no-op: peek gating just falls back to in-page defaults */
+  }
+}
+
+function ssGetRaw(key: string): string | null {
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function ssSetRaw(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    /* no-op: persistence is best-effort */
+  }
+}
+
+// --- Peek trigger evaluator ------------------------------------------------
+//
+// Small, page-type-configurable evaluator that decides WHEN a peek should
+// surface. It only measures — the widget owns all gating (session limits,
+// once-per-page, peekMessage presence) and the actual state transition.
+
+class PeekTrigger {
+  private disposed = false;
+  private timer?: number;
+  private scrollHandler?: () => void;
+
+  constructor(
+    private readonly pageType: SourceType | undefined,
+    private readonly dwellSeconds: number,
+    private readonly onFire: () => void,
+  ) {}
+
+  start(): void {
+    if (this.pageType === "product") {
+      // Product pages: fire after N seconds of dwell time.
+      this.timer = window.setTimeout(() => this.fire(), this.dwellSeconds * 1000);
+    } else if (this.pageType === "blog") {
+      // Article/blog pages: fire once scroll depth crosses ~50%.
+      this.scrollHandler = () => this.evaluateScroll();
+      window.addEventListener("scroll", this.scrollHandler, { passive: true });
+      this.evaluateScroll(); // handle deep-links / short pages already past 50%
+    }
+    // Any other page type has no automatic trigger.
+  }
+
+  private evaluateScroll(): void {
+    if (this.disposed) return;
+    const doc = document.documentElement;
+    const scrollable = doc.scrollHeight - window.innerHeight;
+    if (scrollable <= 0) return; // nothing to scroll (short page)
+    const ratio = (window.scrollY || window.pageYOffset || 0) / scrollable;
+    if (ratio >= ARTICLE_SCROLL_FIRE_RATIO) this.fire();
+  }
+
+  private fire(): void {
+    if (this.disposed) return;
+    this.dispose();
+    this.onFire();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.timer !== undefined) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    if (this.scrollHandler) {
+      window.removeEventListener("scroll", this.scrollHandler);
+      this.scrollHandler = undefined;
+    }
+  }
+}
+
 // --- Widget ----------------------------------------------------------------
 
 class BodyiqWidget {
   private cfg: Required<Pick<BodyiqWidgetConfig, "title" | "greeting">> &
     BodyiqWidgetConfig;
   private root: HTMLElement;
+  private pillEl!: HTMLButtonElement;
+  private peekEl!: HTMLElement;
+  private panelEl!: HTMLElement;
+  private widgetEl!: HTMLElement;
   private messagesEl!: HTMLElement;
   private chipsEl!: HTMLElement;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private history: ChatTurn[] = [];
   private busy = false;
+
+  private state: LauncherState = "dormant";
+  private peekTrigger?: PeekTrigger;
+  private pillTimer?: number;
+  private peekTimeoutId?: number;
 
   constructor(config: BodyiqWidgetConfig) {
     this.cfg = {
@@ -91,24 +248,109 @@ class BodyiqWidget {
       greeting: config.greeting ?? DEFAULTS.greeting,
     };
     this.root = resolveTarget(config.target);
+    this.history = this.loadHistory();
     this.render();
   }
 
+  // --- Rendering -----------------------------------------------------------
+
   private render() {
-    this.root.classList.add("biq-widget");
+    this.root.classList.add("biq-root");
     this.root.innerHTML = "";
 
-    // Header
+    this.buildPill();
+    this.buildPeek();
+    this.buildPanel();
+
+    // Resume an in-progress conversation across a full-page navigation. We go
+    // straight to expanded (and deliberately do NOT steal focus, since this is
+    // an unsolicited restore on page load), skipping the pill/peek intro.
+    if (this.wasPanelOpen()) {
+      this.setState("expanded");
+      return;
+    }
+
+    this.setState("dormant");
+
+    // dormant → pill after a short delay so it's not jarring on load.
+    this.pillTimer = window.setTimeout(() => {
+      if (this.state === "dormant") this.setState("pill");
+    }, PILL_REVEAL_MS);
+
+    this.initPeek();
+  }
+
+  /** The small rounded launcher. */
+  private buildPill() {
+    const pill = el("button", "biq-pill") as HTMLButtonElement;
+    pill.type = "button";
+
+    const icon = el("span", "biq-pill__icon");
+    icon.innerHTML = ICON_CHAT;
+    const label = el("span", "biq-pill__label", this.launcherLabel());
+
+    pill.appendChild(icon);
+    pill.appendChild(label);
+    pill.setAttribute("aria-label", this.pillAriaLabel());
+    pill.addEventListener("click", () => this.open());
+
+    this.pillEl = pill;
+    this.root.appendChild(pill);
+  }
+
+  /**
+   * The auto-surfacing peek card. The container is persistent (so it can be
+   * animated), carries aria-live so screen readers announce it when populated,
+   * and its interactive contents are mounted only while visible (correct tab
+   * order + reliable live-region announcement).
+   */
+  private buildPeek() {
+    const peek = el("div", "biq-peek");
+    peek.setAttribute("aria-live", "polite");
+    this.peekEl = peek;
+    this.root.appendChild(peek);
+  }
+
+  /** The expanded chat panel — wraps the (unchanged) internal chat UI. */
+  private buildPanel() {
+    const panel = el("div", "biq-panel");
+    const widget = el("div", "biq-widget");
+    this.widgetEl = widget;
+    panel.appendChild(widget);
+    this.panelEl = panel;
+    this.root.appendChild(panel);
+
+    this.renderChatUI(widget);
+  }
+
+  /**
+   * Builds the internal chat UI into `mount`. This is the pre-existing widget
+   * body (header, messages, chips, composer, footer) — unchanged except for a
+   * close button in the header that drives expanded → pill.
+   */
+  private renderChatUI(mount: HTMLElement) {
+    // Header (title + close).
     const header = el("div", "biq-header");
     header.appendChild(el("span", "biq-title", this.cfg.title));
-    this.root.appendChild(header);
+
+    const close = el("button", "biq-close") as HTMLButtonElement;
+    close.type = "button";
+    close.setAttribute("aria-label", "Close chat");
+    close.innerHTML = ICON_CLOSE;
+    close.addEventListener("click", () => this.close());
+    header.appendChild(close);
+    mount.appendChild(header);
 
     // Messages
     this.messagesEl = el("div", "biq-messages");
     this.messagesEl.setAttribute("aria-live", "polite");
-    this.root.appendChild(this.messagesEl);
+    mount.appendChild(this.messagesEl);
 
     if (this.cfg.greeting) this.addMessage("assistant", this.cfg.greeting);
+
+    // Replay any persisted conversation (text only — citation cards are not
+    // restored across navigations). `this.history` is loaded in the ctor.
+    for (const turn of this.history) this.addMessage(turn.role, turn.content);
 
     // Quick-reply chips
     this.chipsEl = el("div", "biq-chips");
@@ -121,7 +363,7 @@ class BodyiqWidget {
       });
       this.chipsEl.appendChild(btn);
     }
-    if (chips.length > 0) this.root.appendChild(this.chipsEl);
+    if (chips.length > 0) mount.appendChild(this.chipsEl);
 
     // Composer
     const composer = el("form", "biq-composer");
@@ -144,7 +386,7 @@ class BodyiqWidget {
       e.preventDefault();
       this.onSubmit();
     });
-    this.root.appendChild(composer);
+    mount.appendChild(composer);
 
     // "Talk to a person" fallback — always visible.
     const footer = el("div", "biq-footer");
@@ -152,8 +394,217 @@ class BodyiqWidget {
     human.type = "button";
     human.addEventListener("click", () => this.handleHumanHandoff());
     footer.appendChild(human);
-    this.root.appendChild(footer);
+    mount.appendChild(footer);
+
+    // Chips are dismissed once a conversation is underway; keep that on resume.
+    if (this.history.length > 0) this.hideChips();
   }
+
+  // --- Launcher copy -------------------------------------------------------
+
+  /** Context-aware pill label. (Article pages are typed "blog".) */
+  private launcherLabel(): string {
+    switch (this.cfg.pageContext?.type) {
+      case "product":
+        return "Ask about this product";
+      case "blog":
+        return "Ask about this article";
+      default:
+        return "Ask BODYiQ";
+    }
+  }
+
+  /** Descriptive aria-label reflecting the pill's current text (+ hints). */
+  private pillAriaLabel(): string {
+    let label = `${this.launcherLabel()} — open the BODYiQ assistant`;
+    const replies =
+      this.cfg.quickReplies ?? this.cfg.pageContext?.quickReplies ?? [];
+    if (replies.length > 0) {
+      label += `. For example: ${replies.slice(0, 2).join(", ")}`;
+    }
+    return label;
+  }
+
+  // --- State machine -------------------------------------------------------
+
+  private setState(next: LauncherState) {
+    this.state = next;
+    this.root.classList.remove(
+      "biq-root--dormant",
+      "biq-root--pill",
+      "biq-root--peek",
+      "biq-root--expanded",
+    );
+    this.root.classList.add(`biq-root--${next}`);
+  }
+
+  /** pill/peek → expanded. User-initiated, so focusing the input is fine. */
+  private open() {
+    this.recordOpen();
+    this.peekTrigger?.dispose();
+    this.clearPeekTimeout();
+    this.setState("expanded");
+    this.setPanelOpenFlag(true);
+    this.unmountPeek();
+
+    // Focus the composer after the grow-in settles.
+    const delay = prefersReducedMotion() ? 0 : EXPAND_MS;
+    window.setTimeout(() => this.inputEl?.focus(), delay);
+  }
+
+  /** expanded → pill (never back to dormant). */
+  private close() {
+    this.setState("pill");
+    this.setPanelOpenFlag(false);
+    this.pillEl.focus();
+  }
+
+  // --- Cross-navigation persistence ----------------------------------------
+
+  private loadHistory(): ChatTurn[] {
+    const raw = ssGetRaw(SS_HISTORY);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (t): t is ChatTurn =>
+          !!t &&
+          (t.role === "user" || t.role === "assistant") &&
+          typeof t.content === "string",
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private saveHistory() {
+    ssSetRaw(SS_HISTORY, JSON.stringify(this.history));
+  }
+
+  private wasPanelOpen(): boolean {
+    return ssGetRaw(SS_PANEL_OPEN) === "1";
+  }
+
+  private setPanelOpenFlag(open: boolean) {
+    ssSetRaw(SS_PANEL_OPEN, open ? "1" : "0");
+  }
+
+  // --- Peek behavior -------------------------------------------------------
+
+  /** Wire up the trigger evaluator if this page is eligible for a peek. */
+  private initPeek() {
+    const msg = this.cfg.pageContext?.peekMessage;
+    if (!msg) return; // no contextual copy → never peek (never show generic copy)
+    if (this.peeksSuppressed()) return;
+    if (this.peekAlreadyFired()) return;
+
+    const dwell =
+      this.cfg.pageContext?.peekTriggerSeconds ?? DEFAULT_PEEK_DWELL_SECONDS;
+    this.peekTrigger = new PeekTrigger(this.cfg.pageContext?.type, dwell, () =>
+      this.onPeekTrigger(),
+    );
+    this.peekTrigger.start();
+  }
+
+  /** Called by the trigger evaluator; re-checks gates before surfacing. */
+  private onPeekTrigger() {
+    if (this.state !== "pill") return; // only surface from the plain pill
+    if (this.peeksSuppressed()) return;
+    if (this.peekAlreadyFired()) return;
+    this.showPeek();
+  }
+
+  private showPeek() {
+    const msg = this.cfg.pageContext?.peekMessage;
+    if (!msg) return;
+
+    this.markPeekFired();
+    this.mountPeek(msg);
+    this.setState("peek");
+
+    // Auto-collapse back to the pill if ignored.
+    this.peekTimeoutId = window.setTimeout(
+      () => this.collapsePeek(false),
+      PEEK_TIMEOUT_MS,
+    );
+  }
+
+  /**
+   * peek → pill. `dismissed` is true only for an explicit X tap (which counts
+   * toward the session dismissal limit); an ignored timeout does not.
+   */
+  private collapsePeek(dismissed: boolean) {
+    if (this.state !== "peek") return;
+    this.clearPeekTimeout();
+    if (dismissed) this.recordPeekDismissal();
+
+    this.setState("pill"); // animates the card back down behind the pill
+
+    const delay = prefersReducedMotion() ? 0 : PEEK_EXIT_MS;
+    window.setTimeout(() => {
+      if (this.state === "pill") this.unmountPeek();
+    }, delay);
+  }
+
+  /** Populate the (persistent, aria-live) peek container — announces on insert. */
+  private mountPeek(message: string) {
+    this.peekEl.innerHTML = "";
+
+    const body = el("button", "biq-peek__body") as HTMLButtonElement;
+    body.type = "button";
+    body.appendChild(el("span", "biq-peek__text", message));
+    body.addEventListener("click", () => this.open());
+
+    const dismiss = el("button", "biq-peek__dismiss") as HTMLButtonElement;
+    dismiss.type = "button";
+    dismiss.setAttribute("aria-label", "Dismiss suggestion");
+    dismiss.innerHTML = ICON_CLOSE;
+    dismiss.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.collapsePeek(true);
+    });
+
+    this.peekEl.appendChild(body);
+    this.peekEl.appendChild(dismiss);
+  }
+
+  private unmountPeek() {
+    this.peekEl.innerHTML = "";
+  }
+
+  private clearPeekTimeout() {
+    if (this.peekTimeoutId !== undefined) {
+      clearTimeout(this.peekTimeoutId);
+      this.peekTimeoutId = undefined;
+    }
+  }
+
+  // --- Peek session gating -------------------------------------------------
+
+  private peeksSuppressed(): boolean {
+    return (
+      ssGet(SS_OPENS) >= 1 || ssGet(SS_PEEK_DISMISSALS) >= MAX_PEEK_DISMISSALS
+    );
+  }
+
+  private peekAlreadyFired(): boolean {
+    return ssGet(ssPeekFiredKey(this.cfg.pageContext?.handle)) >= 1;
+  }
+
+  private markPeekFired() {
+    ssSet(ssPeekFiredKey(this.cfg.pageContext?.handle), 1);
+  }
+
+  private recordOpen() {
+    ssSet(SS_OPENS, ssGet(SS_OPENS) + 1);
+  }
+
+  private recordPeekDismissal() {
+    ssSet(SS_PEEK_DISMISSALS, ssGet(SS_PEEK_DISMISSALS) + 1);
+  }
+
+  // --- Chat UI (unchanged behavior) ----------------------------------------
 
   private onSubmit() {
     const text = this.inputEl.value.trim();
@@ -245,6 +696,7 @@ class BodyiqWidget {
       assistantMsg.classList.remove("biq-bubble--streaming");
       this.history.push({ role: "user", content: message });
       if (answer) this.history.push({ role: "assistant", content: answer });
+      this.saveHistory();
       this.setBusy(false);
       this.inputEl.focus();
     }

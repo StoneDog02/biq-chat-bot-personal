@@ -44,8 +44,17 @@
         set in <code>.env.local</code> — until then you'll get a friendly error
         bubble. That's expected.
       </div>
+      <div class="note">
+        Launcher demo: the pill fades in bottom-right after ~1.5s. This preview
+        sets a short <code>peekTriggerSeconds</code> (3s) and a
+        <code>peekMessage</code>, so the peek card auto-surfaces a few seconds
+        after load. Dismiss it (×) or ignore it (8s) to collapse back to the
+        pill; click the pill or peek to expand. Peek gating uses
+        <code>sessionStorage</code> — open a new tab (or clear session storage)
+        to see it again.
+      </div>
 
-      <!-- The widget mounts INLINE into this container. -->
+      <!-- The widget floats bottom-right; this mount node just anchors it. -->
       <div id="bodyiq-assistant"></div>
     </div>
 
@@ -57,7 +66,14 @@
         // Same-origin as the dev server, so no CORS needed for the preview.
         apiUrl: window.location.origin + "/api/chat",
         // Pretend we're on a product page so retrieval bias would kick in.
-        pageContext: { type: "product", handle: "sample-product" },
+        pageContext: {
+          type: "product",
+          handle: "sample-product",
+          // Contextual peek copy (would come from a metafield in production).
+          peekMessage: "Not sure if this is right for your goals? Ask me.",
+          // Short dwell so the peek is easy to see in the preview.
+          peekTriggerSeconds: 3,
+        },
         quickReplies: [
           "Is this right for me?",
           "How do I take it?",
